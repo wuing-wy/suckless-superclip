@@ -1,0 +1,11 @@
+config.h
+*.o
+superclip
+superclip-clipboardd
+clipboard-extension
+tests/fake_extension
+tests/test_foundation
+tests/test_x11
+tests/clipboard_x11
+core
+core.*
