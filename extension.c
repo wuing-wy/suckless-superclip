@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdint.h>
@@ -102,11 +103,13 @@ discover_dir(struct sc_extensions *extensions, const char *dir)
 	if (stream == NULL)
 		return errno == ENOENT ? 0 : -1;
 	while ((entry = readdir(stream)) != NULL) {
+		int pathlen;
+
 		if (!sc_extension_name_valid(entry->d_name) ||
 		    sc_extensions_find(extensions, entry->d_name) != NULL)
 			continue;
-		if (snprintf(joined, sizeof(joined), "%s/%s", dir, entry->d_name) < 0 ||
-		    strlen(joined) >= sizeof(joined))
+		pathlen = snprintf(joined, sizeof(joined), "%s/%s", dir, entry->d_name);
+		if (pathlen < 0 || (size_t)pathlen >= sizeof(joined))
 			continue;
 		if (realpath(joined, resolved) == NULL || stat(resolved, &st) < 0 ||
 		    !S_ISREG(st.st_mode) || access(resolved, X_OK) < 0)
@@ -448,6 +451,8 @@ sc_child_close(struct sc_child *child)
 	if (child == NULL)
 		return;
 	if (child->in_fd >= 0) close(child->in_fd);
+	child->in_fd = -1;
+	child->input_closed = 1;
 	if (child->out_fd >= 0) close(child->out_fd);
 	if (child->err_fd >= 0) close(child->err_fd);
 	if (child->pid > 0 && !child->exited) {
@@ -466,4 +471,29 @@ sc_child_close(struct sc_child *child)
 	free(child->stderr_buf);
 	memset(child, 0, sizeof(*child));
 	child->in_fd = child->out_fd = child->err_fd = -1;
+}
+
+int
+sc_child_quit(struct sc_child *child)
+{
+	static const char *quit_fields[] = { "QUIT" };
+
+	if (child == NULL || child->pid <= 0 || child->exited || child->in_fd < 0 ||
+	    child->input_closed)
+		return -1;
+	if (sc_child_queue(child, quit_fields, 1, 0) < 0)
+		return -1;
+	while (sc_child_flush(child) == 0) {
+		struct pollfd pfd;
+
+		pfd.fd = child->in_fd;
+		pfd.events = POLLOUT;
+		pfd.revents = 0;
+		if (poll(&pfd, 1, 1000) <= 0)
+			return -1;
+	}
+	close(child->in_fd);
+	child->in_fd = -1;
+	child->input_closed = 1;
+	return 0;
 }

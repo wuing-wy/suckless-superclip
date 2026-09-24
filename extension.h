@@ -61,5 +61,6 @@ int sc_child_read_record(struct sc_child *child, struct sc_record *record);
 int sc_child_drain_stderr(struct sc_child *child);
 int sc_child_reap(struct sc_child *child, int block);
 void sc_child_close(struct sc_child *child);
+int sc_child_quit(struct sc_child *child);
 
 #endif
