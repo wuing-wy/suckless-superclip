@@ -10,8 +10,8 @@
 #define SUPERCLIP_CHILD_GRACE_MS 200
 #define SUPERCLIP_GRAB_RETRIES 100
 
-#define SUPERCLIP_FONT "monospace:size=12"
-#define SUPERCLIP_FALLBACK_FONT "Noto Sans Mono CJK SC:size=12"
+#define SUPERCLIP_FONT "MonacoLigaturized Nerd Font Mono:pixelsize=28:antialias=true:autohint=true"
+#define SUPERCLIP_FALLBACK_FONT "TsangerJinKai03:style=W03:pixelsize=28:antialias=true:autohint=true"
 #define SUPERCLIP_FOREGROUND "#e6e6e6"
 #define SUPERCLIP_BACKGROUND "#202020"
 #define SUPERCLIP_SELECTED "#3a6ea5"
