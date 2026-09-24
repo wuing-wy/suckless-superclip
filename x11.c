@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static int
 screen_for_point(XineramaScreenInfo *screens, int nscreens, int x, int y)
@@ -71,6 +72,8 @@ sc_x11_open(struct sc_x11 *x11)
 	FcPattern *pattern;
 	FcResult result;
 	int x, y, n;
+	int grab_tries, grab_status;
+	struct timespec pause;
 
 	if (x11 == NULL)
 		return -1;
@@ -136,8 +139,25 @@ sc_x11_open(struct sc_x11 *x11)
 	}
 	XMapRaised(x11->display, x11->window);
 	XSync(x11->display, False);
-	if (XGrabKeyboard(x11->display, x11->window, True, GrabModeAsync, GrabModeAsync,
-	    CurrentTime) != GrabSuccess)
+	/*
+	 * Shortcut launchers still hold modifiers (e.g. Alt+Shift) while our
+	 * override-redirect window becomes viewable, and another client may
+	 * briefly own the grab. Those states surface as transient
+	 * GrabNotViewable/AlreadyGrabbed/GrabFrozen, so retry with a bounded
+	 * 1ms pause instead of exiting on the first miss. GrabInvalidTime is
+	 * a caller bug, not a transient state, and fails immediately.
+	 */
+	for (grab_tries = 0; ; grab_tries++) {
+		grab_status = XGrabKeyboard(x11->display, x11->window, True,
+		    GrabModeAsync, GrabModeAsync, CurrentTime);
+		if (grab_status == GrabSuccess || grab_status == GrabInvalidTime ||
+		    grab_tries >= SUPERCLIP_GRAB_RETRIES)
+			break;
+		pause.tv_sec = 0;
+		pause.tv_nsec = 1000000L;
+		(void)nanosleep(&pause, NULL);
+	}
+	if (grab_status != GrabSuccess)
 		goto fail;
 	if (x11->ic != NULL)
 		XSetICFocus(x11->ic);
