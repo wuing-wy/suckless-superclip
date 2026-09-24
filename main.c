@@ -49,6 +49,7 @@ struct app {
 	unsigned long request_id;
 	unsigned long active_id;
 	int response_begun;
+	int response_failed;
 	long long debounce_at;
 	enum app_state state;
 	enum app_phase phase;
@@ -101,7 +102,11 @@ add_result(struct app *app, const char *id, const char *title, const char *descr
 {
 	struct app_result *result;
 
-	if (app->nresults == SUPERCLIP_MAX_ITEMS)
+	if (app->nresults == SUPERCLIP_MAX_ITEMS) {
+		app->response_failed = 1;
+		return 0;
+	}
+	if (app->response_failed)
 		return 0;
 	result = &app->results[app->nresults];
 	result->id = sc_xstrndup(id, strlen(id));
@@ -121,8 +126,10 @@ add_result(struct app *app, const char *id, const char *title, const char *descr
 static void
 close_child(struct app *app)
 {
-	if (app->child_live)
+	if (app->child_live) {
+		(void)sc_child_quit(&app->child);
 		sc_child_close(&app->child);
+	}
 	app->child_live = 0;
 	app->phase = APP_PHASE_NONE;
 }
@@ -149,6 +156,7 @@ queue_query(struct app *app)
 	app->request_id++;
 	app->active_id = app->request_id;
 	app->response_begun = 0;
+	app->response_failed = 0;
 	(void)snprintf(id, sizeof(id), "%lu", app->active_id);
 	fields[0] = "QUERY";
 	fields[1] = id;
@@ -257,6 +265,12 @@ handle_record(struct app *app, struct sc_record *record)
 	char *end;
 
 	if (record->kind == SC_RECORD_ERROR) {
+		if (record->nfields < 2)
+			return;
+		errno = 0;
+		id = strtoul(record->fields[1], &end, 10);
+		if (errno != 0 || *end != '\0' || id != app->active_id)
+			return;
 		set_status(app, record->fields[2]);
 		app->state = APP_ERROR;
 		if (app->extension != NULL && app->extension->mode == SC_PROCESS_SHORT)
@@ -291,7 +305,14 @@ handle_record(struct app *app, struct sc_record *record)
 		} else if (record->kind == SC_RECORD_END && app->response_begun) {
 			app->phase = APP_PHASE_NONE;
 			app->response_begun = 0;
-			app->state = APP_RESULT_SELECT;
+			if (app->response_failed) {
+				app->response_failed = 0;
+				free_results(app);
+				set_status(app, "extension returned too many results");
+				app->state = APP_ERROR;
+			} else {
+				app->state = APP_RESULT_SELECT;
+			}
 			if (app->extension->mode == SC_PROCESS_SHORT)
 				close_child(app);
 		} else {
@@ -308,7 +329,7 @@ static void
 handle_child(struct app *app)
 {
 	struct sc_record record;
-	int ret;
+	int ret, n;
 
 	if (!app->child_live)
 		return;
@@ -320,7 +341,7 @@ handle_child(struct app *app)
 	}
 	if (app->child.err_fd >= 0)
 		(void)sc_child_drain_stderr(&app->child);
-	while (app->child.out_fd >= 0) {
+	for (n = 0; n < 32 && app->child.out_fd >= 0; n++) {
 		ret = sc_child_read_record(&app->child, &record);
 		if (ret == 1) {
 			handle_record(app, &record);
@@ -341,10 +362,22 @@ handle_child(struct app *app)
 	}
 	if (app->child_live && app->child.exited && app->child.out_fd < 0 &&
 	    app->phase != APP_PHASE_NONE) {
-		if (app->child.stderr_buf != NULL && app->child.stderr_buf[0] != '\0')
-			set_status(app, app->child.stderr_buf);
-		else
-			set_status(app, "extension exited without a complete response");
+		char *newline;
+		size_t prefix, room, diag;
+
+		set_status(app, "extension error");
+		if (app->child.stderr_buf != NULL && app->child.stderr_buf[0] != '\0') {
+			newline = strchr(app->child.stderr_buf, '\n');
+			prefix = strlen("extension error: ");
+			room = SUPERCLIP_MAX_STDERR - prefix;
+			diag = strlen(app->child.stderr_buf);
+			if (newline != NULL)
+				diag = (size_t)(newline - app->child.stderr_buf);
+			if (diag > room)
+				diag = room;
+			memcpy(app->status + prefix, app->child.stderr_buf, diag);
+			app->status[prefix + diag] = '\0';
+		}
 		app->state = APP_ERROR;
 		close_child(app);
 	}
@@ -479,13 +512,18 @@ draw(struct app *app)
 	size_t i, n = 0, selected = app->selected;
 
 	if (app->extension == NULL) {
-		for (i = 0; i < app->extensions.len; i++) {
+		for (i = 0; i < app->extensions.len && i < SUPERCLIP_MAX_ITEMS; i++) {
 			items[i].title = app->extensions.items[i].name;
 			items[i].description = "";
 		}
-		n = app->extensions.len;
+		n = app->extensions.len < SUPERCLIP_MAX_ITEMS ? app->extensions.len : SUPERCLIP_MAX_ITEMS;
 	} else {
-		(void)snprintf(prompt_buf, sizeof(prompt_buf), "%s › ", app->extension->name);
+		size_t shown_len = strlen(app->extension->name);
+
+		if (shown_len > sizeof(prompt_buf) - sizeof(" › "))
+			shown_len = sizeof(prompt_buf) - sizeof(" › ");
+		memcpy(prompt_buf, app->extension->name, shown_len);
+		memcpy(prompt_buf + shown_len, " › ", sizeof(" › "));
 		prompt = prompt_buf;
 		for (i = 0; i < app->nresults; i++) {
 			items[i].title = app->results[i].title;
@@ -538,6 +576,27 @@ read_description(struct sc_extension *extension)
 	return seen != 0 && ret >= 0 ? 0 : -1;
 }
 
+static void
+print_setup_field(const char *field)
+{
+	const unsigned char *p = (const unsigned char *)field;
+
+	for (; *p != '\0'; p++) {
+		if (*p == '\n')
+			fputs("\\n", stdout);
+		else if (*p == '\t')
+			fputs("\\t", stdout);
+		else if (*p == '\r')
+			fputs("\\r", stdout);
+		else if (*p == '\\')
+			fputs("\\\\", stdout);
+		else if (*p < 0x20 || *p == 0x7f)
+			printf("\\x%02x", *p);
+		else
+			putchar(*p);
+	}
+}
+
 static int
 run_setup(struct sc_extensions *extensions)
 {
@@ -569,8 +628,10 @@ run_setup(struct sc_extensions *extensions)
 					break;
 				}
 				size_t field;
-				for (field = 0; field < record.nfields; field++)
-					printf("%s%s", field == 0 ? "  " : "\t", record.fields[field]);
+				for (field = 0; field < record.nfields; field++) {
+					fputs(field == 0 ? "  " : "\t", stdout);
+					print_setup_field(record.fields[field]);
+				}
 				putchar('\n');
 				sc_record_free(&record);
 				continue;
