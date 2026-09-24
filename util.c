@@ -63,10 +63,14 @@ sc_utf8_valid(const char *s, size_t len)
 		} else if ((p[i] & 0xf0U) == 0xe0U) {
 			left = 2;
 			cp = p[i] & 0x0fU;
+			if (cp == 0 && (p[i + 1] & 0xe0U) == 0x80U)
+				return 0;
 		} else if ((p[i] & 0xf8U) == 0xf0U) {
 			left = 3;
 			cp = p[i] & 0x07U;
 			if (cp > 4)
+				return 0;
+			if (cp == 0 && (p[i + 1] & 0xf0U) == 0x80U)
 				return 0;
 		} else {
 			return 0;
