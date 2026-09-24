@@ -3,8 +3,10 @@ config.h
 superclip
 superclip-clipboardd
 clipboard-extension
+snippets-extension
 tests/fake_extension
 tests/test_foundation
+tests/test_snippets
 tests/test_x11
 tests/clipboard_x11
 core

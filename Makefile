@@ -5,7 +5,7 @@ TEST_OBJS = tests/test_foundation.o protocol.o text.o util.o extension.o clipboa
 
 .PHONY: all clean test check test-sanitize install uninstall
 
-all: config.h superclip superclip-clipboardd clipboard-extension
+all: config.h superclip superclip-clipboardd clipboard-extension snippets-extension
 
 config.h: config.def.h
 	cp config.def.h config.h
@@ -28,11 +28,20 @@ superclip-clipboardd: clipboard/daemon.o clipboard/store.o protocol.o util.o
 clipboard-extension: clipboard/extension.o protocol.o util.o
 	$(CC) $(LDFLAGS) -o $@ clipboard/extension.o protocol.o util.o
 
+snippets/extension.o: snippets/extension.c config.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(shell $(PKG_CONFIG_ENV) $(PKG_CONFIG) --cflags x11) -c -o $@ $<
+
+snippets-extension: snippets/extension.o protocol.o util.o
+	$(CC) $(LDFLAGS) -o $@ snippets/extension.o protocol.o util.o $(shell $(PKG_CONFIG_ENV) $(PKG_CONFIG) --libs x11)
+
 tests/fake_extension: tests/fake_extension.o
 	$(CC) $(LDFLAGS) -o $@ tests/fake_extension.o
 
 tests/test_foundation: $(TEST_OBJS) tests/fake_extension
 	$(CC) $(LDFLAGS) -o $@ $(TEST_OBJS) -lgrapheme
+
+tests/test_snippets: tests/test_snippets.o protocol.o util.o
+	$(CC) $(LDFLAGS) -o $@ tests/test_snippets.o protocol.o util.o
 
 tests/test_x11: tests/test_x11.o x11.o text.o util.o
 	$(CC) $(LDFLAGS) -o $@ tests/test_x11.o x11.o text.o util.o $(X11_LIBS)
@@ -40,9 +49,11 @@ tests/test_x11: tests/test_x11.o x11.o text.o util.o
 tests/clipboard_x11: tests/clipboard_x11.o
 	$(CC) $(LDFLAGS) -o $@ tests/clipboard_x11.o $(CLIP_LIBS)
 
-test: tests/test_foundation tests/test_x11 tests/clipboard_x11 superclip-clipboardd clipboard-extension
+test: tests/test_foundation tests/test_snippets tests/test_x11 tests/clipboard_x11 superclip-clipboardd clipboard-extension snippets-extension
 	./tests/test_foundation
+	./tests/test_snippets
 	./tests/run_xvfb.sh
+	./tests/run_snippets_xvfb.sh
 
 check: clean all test
 
@@ -56,9 +67,10 @@ install: all
 	install -m 0755 superclip $(DESTDIR)$(PREFIX)/bin/superclip
 	install -m 0755 superclip-clipboardd $(DESTDIR)$(PREFIX)/bin/superclip-clipboardd
 	install -m 0755 clipboard-extension $(DESTDIR)$(LIBEXECDIR)/clipboard
+	install -m 0755 snippets-extension $(DESTDIR)$(LIBEXECDIR)/snippets
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/superclip $(DESTDIR)$(PREFIX)/bin/superclip-clipboardd $(DESTDIR)$(LIBEXECDIR)/clipboard
+	rm -f $(DESTDIR)$(PREFIX)/bin/superclip $(DESTDIR)$(PREFIX)/bin/superclip-clipboardd $(DESTDIR)$(LIBEXECDIR)/clipboard $(DESTDIR)$(LIBEXECDIR)/snippets
 
 clean:
-	rm -f *.o clipboard/*.o tests/*.o superclip superclip-clipboardd clipboard-extension tests/fake_extension tests/test_foundation tests/test_x11 tests/clipboard_x11
+	rm -f *.o clipboard/*.o snippets/*.o tests/*.o superclip superclip-clipboardd clipboard-extension snippets-extension tests/fake_extension tests/test_foundation tests/test_snippets tests/test_x11 tests/clipboard_x11
