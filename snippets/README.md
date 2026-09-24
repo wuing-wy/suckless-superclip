@@ -2,6 +2,7 @@
 
 `snippets` 是 `persistent + change` 的系统扩展：从纯文本文件读自定义片段，
 输入即过滤，选中后由常驻 holder 拥有 X11 `CLIPBOARD`，面板退出后仍可粘贴。
+最近选中的片段在同一次面板会话内置顶（内存 recent 区，不改文件顺序）。
 
 [协议](../docs/PROTOCOL.md) · [写扩展](../docs/EXTENSIONS.md) · [SPEC](SPEC.md)
 

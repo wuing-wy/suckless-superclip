@@ -310,6 +310,43 @@ test_limits(void)
 }
 
 static void
+test_recent_first(void)
+{
+	char template[] = "/tmp/snippets-recent.XXXXXX";
+	char runtime[] = "/tmp/snippets-rt-recent.XXXXXX";
+	char file[1024], out[8192] = "", err[4096] = "";
+	char *cli[] = { (char *)"snippets-extension", (char *)"--superclip-query", NULL };
+	char *session[] = { (char *)"snippets-extension", (char *)"--superclip-session", NULL };
+	int status = 0;
+
+	CHECK(mkdtemp(template) != NULL);
+	CHECK(mkdtemp(runtime) != NULL);
+	(void)snprintf(file, sizeof(file), "%s/superclip/snippets", template);
+	make_dirs(template, file);
+	CHECK(write_file(file, "one\tfirst\ntwo\tsecond\nthree\tthird\n") == 0);
+	CHECK(run_extension(cli, template, runtime,
+	    "EXECUTE\t31\t\t3:three\n",
+	    out, sizeof(out), err, sizeof(err), &status) == 0);
+	CHECK(strstr(out, "ERROR\t31\t") == NULL);
+	out[0] = '\0';
+	err[0] = '\0';
+	CHECK(run_extension(session, template, runtime,
+	    "EXECUTE\t33\t\t2:two\n"
+	    "QUERY\t32\t\n"
+	    "QUIT\n",
+	    out, sizeof(out), err, sizeof(err), &status) == 0);
+	CHECK(strstr(out, "BEGIN\t32\nITEM\t32\t2:two\ttwo\tsecond\n") != NULL);
+	CHECK(strstr(out, "ITEM\t32\t1:one\t") != NULL);
+	{
+		char *stop[] = { (char *)"snippets-extension", (char *)"--holder-stop", NULL };
+		char sout[256] = "", serr[1024] = "";
+
+		(void)run_extension(stop, template, runtime, NULL, sout, sizeof(sout),
+		    serr, sizeof(serr), &status);
+	}
+}
+
+static void
 test_stale_title_recheck(void)
 {
 	char template[] = "/tmp/snippets-toctou.XXXXXX";
@@ -340,6 +377,13 @@ test_stale_title_recheck(void)
 	CHECK(run_extension(cli2, template, runtime, "EXECUTE\t13\t\t1:alpha\n", out,
 	    sizeof(out), err, sizeof(err), &status) == 0);
 	CHECK(strstr(out, "ERROR\t13\tunknown snippet\n") != NULL);
+	{
+		char *stop[] = { (char *)"snippets-extension", (char *)"--holder-stop", NULL };
+		char sout[256] = "", serr[1024] = "";
+
+		(void)run_extension(stop, template, runtime, NULL, sout, sizeof(sout),
+		    serr, sizeof(serr), &status);
+	}
 }
 
 int
@@ -350,6 +394,7 @@ main(void)
 	test_parse_filter();
 	test_execute_unknown();
 	test_limits();
+	test_recent_first();
 	test_stale_title_recheck();
 	if (failures != 0) {
 		fprintf(stderr, "test_snippets: %d failures\n", failures);

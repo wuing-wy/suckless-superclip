@@ -30,6 +30,7 @@
 #define SNIPPETS_KEEP_MAX 256U
 #define SNIPPETS_PREVIEW_MAX 120U
 #define SNIPPETS_HOLDER_GRACE_MS 200
+#define SNIPPETS_RECENT_MAX 8U
 
 struct snippet {
 	unsigned long lineno;
@@ -45,6 +46,10 @@ struct snippet_set {
 
 static char warned_path[PATH_MAX];
 static int warned_set;
+
+/* Recently executed result-ids, most recent first. In-memory only. */
+static char *recent_ids[SNIPPETS_RECENT_MAX];
+static size_t nrecent;
 
 static void
 free_set(struct snippet_set *set)
@@ -264,6 +269,66 @@ load_snippets(struct snippet_set *set, const char **fail)
 	return 0;
 }
 
+/*
+ * Remember a result-id as most-recent-first. Duplicates move to the front
+ * so the list never holds the same entry twice.
+ */
+static void
+recent_push(const char *result_id)
+{
+	size_t i, found = SNIPPETS_RECENT_MAX;
+	char *copy;
+
+	if (result_id == NULL || result_id[0] == '\0')
+		return;
+	for (i = 0; i < nrecent; i++) {
+		if (strcmp(recent_ids[i], result_id) == 0) {
+			found = i;
+			break;
+		}
+	}
+	if (found != SNIPPETS_RECENT_MAX) {
+		copy = recent_ids[found];
+		memmove(&recent_ids[1], &recent_ids[0], found * sizeof(recent_ids[0]));
+		recent_ids[0] = copy;
+		return;
+	}
+	copy = sc_xstrndup(result_id, strlen(result_id));
+	if (copy == NULL)
+		return;
+	if (nrecent == SNIPPETS_RECENT_MAX) {
+		free(recent_ids[nrecent - 1]);
+		nrecent--;
+	}
+	memmove(&recent_ids[1], &recent_ids[0], nrecent * sizeof(recent_ids[0]));
+	recent_ids[0] = copy;
+	nrecent++;
+}
+
+static const struct snippet *
+find_snippet(const struct snippet_set *set, const char *result_id)
+{
+	const char *colon, *want_title;
+	char *end;
+	unsigned long lineno;
+	size_t i;
+
+	colon = strchr(result_id, ':');
+	if (colon == NULL || colon == result_id)
+		return NULL;
+	errno = 0;
+	lineno = strtoul(result_id, &end, 10);
+	if (errno != 0 || end != colon || lineno == 0)
+		return NULL;
+	want_title = colon + 1;
+	for (i = 0; i < set->len; i++) {
+		if (set->items[i].lineno == lineno &&
+		    strcmp(set->items[i].title, want_title) == 0)
+			return &set->items[i];
+	}
+	return NULL;
+}
+
 static void
 preview_body(const char *body, char *out, size_t cap)
 {
@@ -320,13 +385,46 @@ respond_error(int fd, const char *id, const char *message)
 }
 
 static int
+emit_item(int fd, const char *id, const struct snippet *item, size_t *shown)
+{
+	const char *fields[5];
+	char rid[640];
+	char preview[SNIPPETS_PREVIEW_MAX + 1];
+	int n;
+
+	if (*shown >= SNIPPETS_KEEP_MAX)
+		return 0;
+	n = snprintf(rid, sizeof(rid), "%lu:%s", item->lineno, item->title);
+	if (n < 0 || (size_t)n >= sizeof(rid))
+		return 0;
+	preview_body(item->body, preview, sizeof(preview));
+	fields[0] = "ITEM";
+	fields[1] = id;
+	fields[2] = rid;
+	fields[3] = item->title;
+	fields[4] = preview;
+	if (write_fields(fd, fields, 5) < 0)
+		return -1;
+	(*shown)++;
+	return 0;
+}
+
+static int
+matches(const struct snippet *item, const char *query)
+{
+	return query[0] == '\0' || strstr(item->title, query) != NULL ||
+	    strstr(item->body, query) != NULL;
+}
+
+static int
 respond_query(int fd, const char *id, const char *query)
 {
 	struct snippet_set set;
 	const char *fail = NULL;
 	const char *begin[] = { "BEGIN", id };
 	const char *end[] = { "END", id };
-	size_t i, shown = 0;
+	const struct snippet *shown_items[SNIPPETS_KEEP_MAX];
+	size_t i, nshown = 0, shown = 0, r;
 
 	if (load_snippets(&set, &fail) < 0)
 		return respond_error(fd, id, fail);
@@ -334,30 +432,41 @@ respond_query(int fd, const char *id, const char *query)
 		free_set(&set);
 		return -1;
 	}
-	for (i = 0; i < set.len && shown < SNIPPETS_KEEP_MAX; i++) {
-		const char *fields[5];
-		char rid[640];
-		char preview[SNIPPETS_PREVIEW_MAX + 1];
-		int n;
+	/* Recent executions first, de-duplicated by result-id. */
+	for (r = 0; r < nrecent; r++) {
+		const struct snippet *hit = find_snippet(&set, recent_ids[r]);
 
-		if (query[0] != '\0' && strstr(set.items[i].title, query) == NULL &&
-		    strstr(set.items[i].body, query) == NULL)
+		if (hit == NULL || !matches(hit, query))
 			continue;
-		n = snprintf(rid, sizeof(rid), "%lu:%s", set.items[i].lineno,
-		    set.items[i].title);
-		if (n < 0 || (size_t)n >= sizeof(rid))
+		for (i = 0; i < nshown; i++)
+			if (shown_items[i] == hit)
+				break;
+		if (i != nshown)
 			continue;
-		preview_body(set.items[i].body, preview, sizeof(preview));
-		fields[0] = "ITEM";
-		fields[1] = id;
-		fields[2] = rid;
-		fields[3] = set.items[i].title;
-		fields[4] = preview;
-		if (write_fields(fd, fields, 5) < 0) {
+		if (emit_item(fd, id, hit, &shown) < 0) {
 			free_set(&set);
 			return -1;
 		}
-		shown++;
+		shown_items[nshown++] = hit;
+	}
+	for (i = 0; i < set.len; i++) {
+		size_t k;
+
+		if (!matches(&set.items[i], query))
+			continue;
+		for (k = 0; k < nshown; k++)
+			if (shown_items[k] == &set.items[i])
+				break;
+		if (k != nshown)
+			continue;
+		if (emit_item(fd, id, &set.items[i], &shown) < 0) {
+			free_set(&set);
+			return -1;
+		}
+		if (nshown < sizeof(shown_items) / sizeof(shown_items[0]))
+			shown_items[nshown++] = &set.items[i];
+		if (shown >= SNIPPETS_KEEP_MAX)
+			break;
 	}
 	if (set.skipped != 0)
 		fprintf(stderr, "snippets: skipped %lu bad lines\n", set.skipped);
@@ -743,12 +852,7 @@ respond_execute(int fd, const char *id, const char *result_id)
 {
 	struct snippet_set set;
 	const char *fail = NULL;
-	const char *colon;
-	char *end;
-	unsigned long lineno;
-	const char *want_title;
 	const struct snippet *hit = NULL;
-	size_t i;
 	int ready[2] = { -1, -1 };
 	pid_t middle;
 	char pid_path[PATH_MAX];
@@ -758,24 +862,7 @@ respond_execute(int fd, const char *id, const char *result_id)
 
 	if (load_snippets(&set, &fail) < 0)
 		return respond_error(fd, id, fail);
-	colon = strchr(result_id, ':');
-	if (colon == NULL || colon == result_id) {
-		free_set(&set);
-		return respond_error(fd, id, "unknown snippet");
-	}
-	errno = 0;
-	lineno = strtoul(result_id, &end, 10);
-	if (errno != 0 || end != colon || lineno == 0) {
-		free_set(&set);
-		return respond_error(fd, id, "unknown snippet");
-	}
-	want_title = colon + 1;
-	for (i = 0; i < set.len; i++) {
-		if (set.items[i].lineno == lineno && strcmp(set.items[i].title, want_title) == 0) {
-			hit = &set.items[i];
-			break;
-		}
-	}
+	hit = find_snippet(&set, result_id);
 	if (hit == NULL) {
 		free_set(&set);
 		return respond_error(fd, id, "unknown snippet");
@@ -785,6 +872,8 @@ respond_execute(int fd, const char *id, const char *result_id)
 		free_set(&set);
 		return respond_error(fd, id, "cannot own clipboard");
 	}
+	/* Selection counts as use even if owning the clipboard fails below. */
+	recent_push(result_id);
 	body_len = strlen(body);
 	if (set.skipped != 0)
 		fprintf(stderr, "snippets: skipped %lu bad lines\n", set.skipped);
