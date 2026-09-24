@@ -3,8 +3,10 @@
 #include "extension.h"
 #include "protocol.h"
 #include "text.h"
+#include "util.h"
 
 #include <poll.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +62,11 @@ test_protocol(void)
 	memset(oversized, 'a', sizeof(oversized));
 	oversized[sizeof(oversized) - 1] = '\n';
 	CHECK(sc_protocol_parse(oversized, sizeof(oversized), &record) < 0);
+	CHECK(sc_protocol_parse("BOGUS\0\n", 7, &record) < 0);
+	CHECK(!sc_utf8_valid("\340\200\257", 3));
+	CHECK(!sc_utf8_valid("\360\200\217\257", 4));
+	CHECK(sc_utf8_valid("\340\252\257", 3));
+	CHECK(sc_utf8_valid("\360\237\214\215", 4));
 }
 
 static void
@@ -91,6 +98,9 @@ read_one(struct sc_child *child, struct sc_record *record)
 	pfd.events = POLLIN | POLLHUP;
 	pfd.revents = 0;
 	for (;;) {
+		if (child->out_fd < 0)
+			return 0;
+		pfd.fd = child->out_fd;
 		ret = sc_child_read_record(child, record);
 		if (ret != 0)
 			return ret;
@@ -240,6 +250,78 @@ test_child_queue_compaction(void)
 }
 
 static void
+test_response_limits(void)
+{
+	struct sc_child child;
+	struct sc_record record;
+	size_t items = 0;
+	int saw_end = 0;
+
+	CHECK(sc_child_spawn(&child, fake_extension_path(), "--many-items") == 0);
+	memset(&record, 0, sizeof(record));
+	while (child.out_fd >= 0) {
+		int ret = read_one(&child, &record);
+
+		if (ret != 1)
+			break;
+		if (record.kind == SC_RECORD_ITEM)
+			items++;
+		else if (record.kind == SC_RECORD_END)
+			saw_end = 1;
+		sc_record_free(&record);
+		memset(&record, 0, sizeof(record));
+	}
+	sc_record_free(&record);
+	sc_child_close(&child);
+	CHECK(items == SUPERCLIP_MAX_ITEMS + 10);
+	CHECK(saw_end);
+}
+
+static void
+test_quit_handshake(void)
+{
+	struct sc_child child;
+	struct sc_record record;
+	char buf[16];
+	ssize_t n;
+	size_t used = 0;
+
+	CHECK(sc_child_spawn(&child, fake_extension_path(), "--quit-echo") == 0);
+	CHECK(sc_child_quit(&child) == 0);
+	CHECK(child.in_fd < 0);
+	if (sc_set_nonblock(child.out_fd) < 0)
+		CHECK(0 && "cannot set nonblock on test pipe");
+	while (child.out_fd >= 0 && used < sizeof(buf) - 1) {
+		struct pollfd pfd;
+
+		pfd.fd = child.out_fd;
+		pfd.events = POLLIN | POLLHUP;
+		pfd.revents = 0;
+		if (poll(&pfd, 1, 2000) <= 0)
+			break;
+		n = read(child.out_fd, buf + used, sizeof(buf) - 1 - used);
+		if (n > 0) {
+			used += (size_t)n;
+			buf[used] = '\0';
+			if (strstr(buf, "QUIT-SEEN") != NULL)
+				break;
+			continue;
+		}
+		if (n == 0)
+			break;
+		if (errno == EINTR)
+			continue;
+		if (errno == EAGAIN || errno == EWOULDBLOCK)
+			continue;
+		break;
+	}
+	buf[used] = '\0';
+	CHECK(strstr(buf, "QUIT-SEEN") != NULL);
+	sc_record_free(&record);
+	sc_child_close(&child);
+}
+
+static void
 test_store(void)
 {
 	char tmp[] = "/tmp/superclip-store.XXXXXX";
@@ -295,6 +377,8 @@ main(void)
 	test_extensions();
 	test_child_failures();
 	test_child_queue_compaction();
+	test_response_limits();
+	test_quit_handshake();
 	test_store();
 	return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

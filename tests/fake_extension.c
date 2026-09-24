@@ -2,6 +2,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "config.h"
+
 int
 main(int argc, char **argv)
 {
@@ -47,6 +49,33 @@ main(int argc, char **argv)
 	}
 	if (strcmp(argv[1], "--hang") == 0) {
 		sleep(10);
+		return 0;
+	}
+	if (strcmp(argv[1], "--many-items") == 0) {
+		size_t i;
+
+		fputs("BEGIN\t1\n", stdout);
+		for (i = 0; i < SUPERCLIP_MAX_ITEMS + 10; i++)
+			printf("ITEM\t1\tid-%zu\tTitle %zu\tDescription %zu\n", i, i, i);
+		fputs("END\t1\n", stdout);
+		return 0;
+	}
+	if (strcmp(argv[1], "--stale-error") == 0) {
+		fputs("ERROR\t999\tstale failure\n", stdout);
+		return 0;
+	}
+	if (strcmp(argv[1], "--quit-echo") == 0) {
+		char line[65536];
+
+		while (fgets(line, sizeof(line), stdin) != NULL) {
+			if (strcmp(line, "QUIT\n") == 0) {
+				fputs("QUIT-SEEN\n", stdout);
+				fflush(stdout);
+				return 0;
+			}
+			fputs("BEGIN\t1\nEND\t1\n", stdout);
+			fflush(stdout);
+		}
 		return 0;
 	}
 	return 2;
