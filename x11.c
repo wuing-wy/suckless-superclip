@@ -111,9 +111,10 @@ sc_x11_open(struct sc_x11 *x11)
 	x11->draw = XftDrawCreate(x11->display, x11->window, x11->visual, x11->colormap);
 	if (x11->draw == NULL)
 		goto fail;
-	if (!XftColorAllocName(x11->display, x11->visual, x11->colormap, "#e6e6e6", &x11->foreground) ||
-	    !XftColorAllocName(x11->display, x11->visual, x11->colormap, "#202020", &x11->background) ||
-	    !XftColorAllocName(x11->display, x11->visual, x11->colormap, "#3a6ea5", &x11->selected))
+	if (!XftColorAllocName(x11->display, x11->visual, x11->colormap, SUPERCLIP_FOREGROUND, &x11->foreground) ||
+	    !XftColorAllocName(x11->display, x11->visual, x11->colormap, SUPERCLIP_PROMPT, &x11->prompt) ||
+	    !XftColorAllocName(x11->display, x11->visual, x11->colormap, SUPERCLIP_BACKGROUND, &x11->background) ||
+	    !XftColorAllocName(x11->display, x11->visual, x11->colormap, SUPERCLIP_SELECTED, &x11->selected))
 		goto fail;
 	x11->utf8_string = XInternAtom(x11->display, "UTF8_STRING", False);
 	x11->clipboard = XInternAtom(x11->display, "CLIPBOARD", False);
@@ -320,7 +321,7 @@ sc_x11_draw(struct sc_x11 *x11, const char *prompt, const char *query, size_t cu
 	y = x11->padding + x11->font->ascent;
 	if (cursor > strlen(query))
 		cursor = strlen(query);
-	draw_text(x11, &x11->foreground, x11->padding, y, prompt);
+	draw_text(x11, &x11->prompt, x11->padding, y, prompt);
 	draw_text(x11, &x11->foreground, x11->padding + text_width(x11, prompt) + 8, y, query);
 	XftDrawRect(x11->draw, &x11->foreground,
 	    x11->padding + text_width(x11, prompt) + 8 + text_width_n(x11, query, cursor),

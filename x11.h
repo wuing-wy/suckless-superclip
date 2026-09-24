@@ -26,6 +26,7 @@ struct sc_x11 {
 	size_t fallback_scanned;
 	FcFontSet *fallback_set;
 	XftColor foreground;
+	XftColor prompt;
 	XftColor background;
 	XftColor selected;
 	XIM im;

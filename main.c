@@ -474,6 +474,7 @@ static void
 draw(struct app *app)
 {
 	struct sc_draw_item items[SUPERCLIP_MAX_ITEMS];
+	char prompt_buf[512];
 	const char *prompt = "> ";
 	size_t i, n = 0, selected = app->selected;
 
@@ -484,7 +485,8 @@ draw(struct app *app)
 		}
 		n = app->extensions.len;
 	} else {
-		prompt = app->extension->name;
+		(void)snprintf(prompt_buf, sizeof(prompt_buf), "%s › ", app->extension->name);
+		prompt = prompt_buf;
 		for (i = 0; i < app->nresults; i++) {
 			items[i].title = app->results[i].title;
 			items[i].description = app->results[i].description;
