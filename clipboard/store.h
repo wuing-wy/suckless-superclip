@@ -24,6 +24,7 @@ struct sc_clip_store {
 int sc_clip_store_open(struct sc_clip_store *store, const char *path);
 void sc_clip_store_close(struct sc_clip_store *store);
 int sc_clip_store_add(struct sc_clip_store *store, const char *text, size_t len);
+int sc_clip_store_touch(struct sc_clip_store *store, uint64_t id);
 const struct sc_clip_entry *sc_clip_store_find(const struct sc_clip_store *store, uint64_t id);
 int sc_clip_store_clear(struct sc_clip_store *store);
 

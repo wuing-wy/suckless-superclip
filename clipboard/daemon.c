@@ -357,6 +357,11 @@ respond_execute(struct daemon *daemon, int fd, const char *id, const char *entry
 		fields[0] = "ERROR"; fields[1] = id; fields[2] = "clipboard entry no longer exists";
 		return write_fields(fd, fields, 3);
 	}
+	if (sc_clip_store_touch(&daemon->store, entry->id) < 0) {
+		fields[0] = "ERROR"; fields[1] = id; fields[2] = "clipboard entry no longer exists";
+		return write_fields(fd, fields, 3);
+	}
+	entry = &daemon->store.entries[0];
 	own_text(daemon, entry->text, entry->len);
 	fields[0] = "OK"; fields[1] = id;
 	return write_fields(fd, fields, 2);

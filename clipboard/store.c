@@ -235,6 +235,41 @@ sc_clip_store_find(const struct sc_clip_store *store, uint64_t id)
 	return NULL;
 }
 
+/*
+ * Move the entry to the front with a fresh id so the most recently
+ * executed item sorts first. Already-front entries are left alone.
+ */
+int
+sc_clip_store_touch(struct sc_clip_store *store, uint64_t id)
+{
+	struct sc_clip_entry moved;
+	size_t i;
+
+	if (store == NULL || store->len == 0)
+		return -1;
+	for (i = 0; i < store->len; i++)
+		if (store->entries[i].id == id)
+			break;
+	if (i == store->len)
+		return -1;
+	if (i == 0)
+		return 0;
+	memset(&moved, 0, sizeof(moved));
+	moved.text = sc_xstrndup(store->entries[i].text, store->entries[i].len);
+	if (moved.text == NULL)
+		return -1;
+	moved.len = store->entries[i].len;
+	moved.id = store->next_id++;
+	entry_free(&store->entries[i]);
+	memmove(&store->entries[1], &store->entries[0], i * sizeof(store->entries[0]));
+	store->entries[0] = moved;
+	if (append_entry(store, &moved) < 0) {
+		store->next_id--;
+		return -1;
+	}
+	return 1;
+}
+
 int
 sc_clip_store_clear(struct sc_clip_store *store)
 {

@@ -345,10 +345,16 @@ test_store(void)
 	CHECK(sc_clip_store_add(&store, "second", 6) == 1);
 	entry = sc_clip_store_find(&store, 3);
 	CHECK(entry != NULL && strcmp(entry->text, "second") == 0);
+	CHECK(sc_clip_store_touch(&store, 1) == 1);
+	CHECK(strcmp(store.entries[0].text, "first") == 0);
+	CHECK(sc_clip_store_touch(&store, store.entries[0].id) == 0);
+	entry = sc_clip_store_find(&store, 99999);
+	CHECK(entry == NULL);
+	CHECK(sc_clip_store_touch(&store, 99999) == -1);
 	sc_clip_store_close(&store);
 	CHECK(sc_clip_store_open(&store, path) == 0);
-	CHECK(store.len == 3);
-	CHECK(strcmp(store.entries[0].text, "second") == 0);
+	CHECK(store.len == 4);
+	CHECK(strcmp(store.entries[0].text, "first") == 0);
 	sc_clip_store_close(&store);
 	fd = open(path, O_WRONLY | O_APPEND);
 	CHECK(fd >= 0);
@@ -357,7 +363,7 @@ test_store(void)
 		CHECK(close(fd) == 0);
 	}
 	CHECK(sc_clip_store_open(&store, path) == 0);
-	CHECK(store.len == 3);
+	CHECK(store.len == 4);
 	for (i = 0; i < SC_CLIP_MAX_ENTRIES + 1; i++) {
 		(void)snprintf(item, sizeof(item), "item-%zu", i);
 		CHECK(sc_clip_store_add(&store, item, strlen(item)) >= 0);
